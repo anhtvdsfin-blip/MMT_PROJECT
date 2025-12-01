@@ -17,6 +17,52 @@
 #include <pthread.h>
 #include "entity/entities.h"
 
+void register_account(const char *username, const char *password) {
+    if (!username || !password) {
+        printf("Error: username or password is NULL\n");
+        return;
+    }
+
+    // check username exists
+    for (int i = 0; i < accountCount; i++) {
+        if (strcmp(accounts[i].username, username) == 0) {
+            printf("Error: username '%s' already exists\n", username);
+            return;
+        }
+    }
+
+    // check server full
+    if (accountCount >= MAX_USER) {
+        printf("Error: server full, cannot create more accounts\n");
+        return;
+    }
+
+    // Create new account
+    Account new_acc;
+    strncpy(new_acc.username, username, sizeof(new_acc.username) - 1);
+    new_acc.username[sizeof(new_acc.username) - 1] = '\0';
+    strncpy(new_acc.password, password, sizeof(new_acc.password) - 1);
+    new_acc.password[sizeof(new_acc.password) - 1] = '\0';
+    new_acc.status = 1;       // account active
+    new_acc.is_logged_in = 0; // not logged in
+
+    // Add to accounts array
+    accounts[accountCount] = new_acc;
+    accountCount++;
+
+    // Write to account.txt
+    char line[128];
+    snprintf(line, sizeof(line), "%s 1", username);
+    FILE *f = fopen("account.txt", "a");
+    if (f) {
+        fprintf(f, "%s\n", line);
+        fclose(f);
+        printf("Account '%s' created successfully\n", username);
+    } else {
+        perror("fopen account.txt");
+    }
+}
+
 
 
 int send_request(int sockfd, const char *buf);
@@ -51,13 +97,13 @@ void handle_command(client_session_t *session, const char *command){
             return;
         }
 
-    int ret = create_account(username, password);
-        if (ret == -2) {
-            send_request(session->sockfd, "409 Conflict\r\n"); // trùng username
-        } else if (ret == -1) {
+    int reg = register_account(username, password);
+        if (reg == -2) {
+            send_request(session->sockfd, "409 Conflict\r\n"); // Username already exists
+        } else if (reg == -1) {
             send_request(session->sockfd, "500 Server full\r\n");
         } else {
-            send_request(session->sockfd, "201 Created\r\n"); // đăng ký thành công
+            send_request(session->sockfd, "201 Created\r\n"); // Registration successful
         }
 
     } else if (strncmp(line, "ADD_FAVORITE|", 13) == 0) {
