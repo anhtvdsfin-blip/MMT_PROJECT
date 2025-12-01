@@ -43,8 +43,23 @@ void handle_command(client_session_t *session, const char *command){
         
     } else if(strncmp(line, "LOGOUT|", 7) == 0) {
         
-    } else if (strncmp(line, "REGISTER|", 9) == 0) {
-        
+    } else if (strncmp(command, "REGISTER|", 9) == 0) {
+        char username[50], password[50];
+    
+        if (sscanf(command + 9, "%49[^|]|%49s", username, password) != 2) {
+            send_request(session->sockfd, "400 Bad Request\r\n");
+            return;
+        }
+
+    int ret = create_account(username, password);
+        if (ret == -2) {
+            send_request(session->sockfd, "409 Conflict\r\n"); // trùng username
+        } else if (ret == -1) {
+            send_request(session->sockfd, "500 Server full\r\n");
+        } else {
+            send_request(session->sockfd, "201 Created\r\n"); // đăng ký thành công
+        }
+
     } else if (strncmp(line, "ADD_FAVORITE|", 13) == 0) {
         
     } else if (strncmp(line, "LIST_FAVORITES|", 15) == 0) {
