@@ -17,24 +17,24 @@
 #include <pthread.h>
 #include "entity/entities.h"
 
-void register_account(const char *username, const char *password) {
+int register_account(const char *username, const char *password) {
     if (!username || !password) {
         printf("Error: username or password is NULL\n");
-        return;
+        return -3;
     }
 
     // check username exists
     for (int i = 0; i < accountCount; i++) {
         if (strcmp(accounts[i].username, username) == 0) {
             printf("Error: username '%s' already exists\n", username);
-            return;
+            return -2;
         }
     }
 
     // check server full
     if (accountCount >= MAX_USER) {
         printf("Error: server full, cannot create more accounts\n");
-        return;
+        return -1;
     }
 
     // Create new account
@@ -52,15 +52,15 @@ void register_account(const char *username, const char *password) {
 
     // Write to account.txt
     char line[128];
-    snprintf(line, sizeof(line), "%s 1", username);
+    snprintf(line, sizeof(line), "%s|%s|1|", username, password);
     FILE *f = fopen("account.txt", "a");
     if (f) {
         fprintf(f, "%s\n", line);
         fclose(f);
-        printf("Account '%s' created successfully\n", username);
     } else {
         perror("fopen account.txt");
     }
+    return 0;
 }
 
 
@@ -101,8 +101,8 @@ void handle_command(client_session_t *session, const char *command){
         if (reg == -2) {
             send_request(session->sockfd, "409 Conflict\r\n"); // Username already exists
         } else if (reg == -1) {
-            send_request(session->sockfd, "500 Server full\r\n");
-        } else {
+            send_request(session->sockfd, "500 Server full\r\n"); //server full
+        } else if(reg == 0) {
             send_request(session->sockfd, "201 Created\r\n"); // Registration successful
         }
 
