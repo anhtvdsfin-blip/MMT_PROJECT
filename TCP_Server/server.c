@@ -18,22 +18,15 @@
 #include "entity/entities.h"
 
 int register_account(const char *username, const char *password) {
-    if (!username || !password) {
-        printf("Error: username or password is NULL\n");
-        return -3;
-    }
-
     // check username exists
     for (int i = 0; i < accountCount; i++) {
         if (strcmp(accounts[i].username, username) == 0) {
-            printf("Error: username '%s' already exists\n", username);
             return -2;
         }
     }
 
     // check server full
     if (accountCount >= MAX_USER) {
-        printf("Error: server full, cannot create more accounts\n");
         return -1;
     }
 
