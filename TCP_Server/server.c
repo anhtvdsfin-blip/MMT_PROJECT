@@ -36,22 +36,15 @@ int mark_notification_seen(int notif_id);
 void login(const char *username, const char *password);
 void logout(const char *username);
 int register_account(const char *username, const char *password) {
-    if (!username || !password) {
-        printf("Error: username or password is NULL\n");
-        return -3;
-    }
-
     // check username exists
     for (int i = 0; i < accountCount; i++) {
         if (strcmp(accounts[i].username, username) == 0) {
-            printf("Error: username '%s' already exists\n", username);
             return -2;
         }
     }
 
     // check server full
     if (accountCount >= MAX_USER) {
-        printf("Error: server full, cannot create more accounts\n");
         return -1;
     }
 
@@ -103,7 +96,7 @@ pthread_mutex_t account_lock = PTHREAD_MUTEX_INITIALIZER;
 void handle_command(client_session_t *session, const char *command){
     if (strncmp(line, "LOGIN|", 6) == 0) {
         if (sccanf(line + 6, "%63[^|]|%127[^\r\n]", username, password) != 2) {
-            send_request(session->sockfd, "300 Invalid LOGIN format\r\n");
+            send_request(session->sockfd, "400 Invalid LOGIN format\r\n");
             return;
         }
 
@@ -119,18 +112,16 @@ void handle_command(client_session_t *session, const char *command){
         session->username[0] = '\0';
     } else if (strncmp(line, "REGISTER|", 9) == 0) {
         if (sscanf(line + 9, "%63[^|]|%127[^\r\n]", username, password) != 2) {
-            send_request(session->sockfd, "300 Invalid REGISTER format\r\n");
+            send_request(session->sockfd, "400 Invalid REGISTER format\r\n");
             return;
         }
         int reg_result = register_account(username, password);
         if (reg_result == 0) {
-            send_request(session->sockfd, "210 Registration successful\r\n");
+            send_request(session->sockfd, "201 Registration successful\r\n");
         } else if (reg_result == -2) {
             send_request(session->sockfd, "400 Username already exists\r\n");
         } else if (reg_result == -1) {
             send_request(session->sockfd, "500 Server full, cannot register\r\n");
-        } else {
-            send_request(session->sockfd, "500 Internal server error\r\n");
         }
 
     } else if (strncmp(line, "ADD_FAVORITE|", 13) == 0) {
