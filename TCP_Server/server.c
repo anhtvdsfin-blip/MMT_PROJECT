@@ -32,8 +32,8 @@ int mark_notification_seen(int notif_id);
 
 //function 
 void login(const char *username, const char *password);
-void logout(const char *username);
-int register_account(const char *username, const char *password) {
+void logout(const char *username); 
+void register_account(const char *username, const char *password) {
      int cre = create_account(username, password);
         if (cre == 0) {
             send_request(session->sockfd, "201 Registration successful\r\n");
