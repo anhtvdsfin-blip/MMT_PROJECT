@@ -192,18 +192,14 @@ find_account(const char *username) {
 int create_account(const char *username, const char *password) {
     if (!username || !password) return -1;
 
-    pthread_mutex_lock(&account_lock);
-
     // Check if username already exists
     for (int i = 0; i < accountCount; i++) {
         if (strcmp(accounts[i].username, username) == 0) {
-            pthread_mutex_unlock(&account_lock);
             return -2; // username already exists
         }
     }
 
     if (accountCount >= MAX_USER) {
-        pthread_mutex_unlock(&account_lock);
         return -1; // server full
     }
 
@@ -230,8 +226,6 @@ int create_account(const char *username, const char *password) {
     } else {
         perror("fopen account.txt");
     }
-
-    pthread_mutex_unlock(&account_lock);
     return 0;
 }
 
