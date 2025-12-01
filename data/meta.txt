@@ -1,0 +1,4 @@
+# meta counters
+last_fav_id=0
+last_req_id=0
+last_notif_id=0

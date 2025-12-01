@@ -1,0 +1,2 @@
+# friends file: format per line
+# userA|userB|since
