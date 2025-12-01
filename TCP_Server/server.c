@@ -82,7 +82,10 @@ void handle_command(client_session_t *session, const char *command){
         
     } else if (strncmp(line, "REMOVE_FRIEND|", 15) == 0) {
         
-    } else if (strncmp(line, "LIST_NOTIFICATIONS|", 18) == 0) {
+    } else if (strncmp(line, "TAG_FRIEND|", 23) == 0) {
+        
+    } 
+    else if (strncmp(line, "LIST_NOTIFICATIONS|", 18) == 0) {
         
     }else {
         send_request(session->sockfd, "400 Unknown request\r\n");
@@ -134,6 +137,10 @@ void add_friend_request(const char *from, const char *to) {
         return;
     }
     send_request(session->sockfd, "202 Friend request sent\r\n");
+}
+
+void accept_friend_request(int req_id) {
+
 }
 
 

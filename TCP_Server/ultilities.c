@@ -242,3 +242,7 @@ int create_friend_request(const char *from, const char *to) {
     snprintf(line, sizeof(line), "%d|%s|%s|%ld", new_id, from, to, time(NULL));
     return append_line_to_file("data/requests.txt", line);
 }
+
+int accept_friend_request(int request_id) {
+    return 0;
+}
