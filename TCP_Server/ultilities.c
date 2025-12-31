@@ -10,9 +10,53 @@
 #include <sys/socket.h>
 #include <unistd.h>
 
-extern Account accounts[];
-extern int accountCount;
+
 extern pthread_mutex_t account_lock;
+/**
+ * @function writeLog: Write request and response information into log file.
+ *
+ * @param client_addr: Client IP:Port address
+ * @param request: Request received from client
+ * @param result: Result of processing
+ */
+void writeLog(int sockfd, const char *buff, const char *type) {
+    char filename[64];
+    snprintf(filename, sizeof(filename), "log_%s.txt", MSSV);
+
+    FILE *f = fopen(filename, "a");
+    if (!f) {
+        perror("Cannot open log file");
+        return;
+    }
+	char ip[INET_ADDRSTRLEN];
+	struct sockaddr_in addr;
+	socklen_t addr_len = sizeof(addr);
+	char client_addr[32] = "UNKNOWN";
+
+	if (getpeername(sockfd, (struct sockaddr*)&addr, &addr_len) == 0) {
+		inet_ntop(AF_INET, &addr.sin_addr, ip, sizeof(ip));
+		int port = ntohs(addr.sin_port);
+		snprintf(client_addr, sizeof(client_addr), "%s:%d", ip, port);
+	}
+
+    time_t now = time(NULL);
+    struct tm *t = localtime(&now);
+
+    fprintf(f, "[%02d/%02d/%04d %02d:%02d:%02d]$%s$%s$%s\n",
+            t->tm_mday,
+            t->tm_mon + 1,
+            t->tm_year + 1900,
+            t->tm_hour,
+            t->tm_min,
+            t->tm_sec,
+            client_addr ? client_addr : "",
+            type ? type : "",
+            buff ? buff : "");
+
+    fclose(f);
+}
+
+
 
 // DATA HELPER FUNCTIONS
 int init_data_store(const char *db_path) {
@@ -35,7 +79,8 @@ int send_request(int sockfd, const char *buf) {
 		perror("send() error");
 		return -1;
 	}
-	usleep(2000);
+	writeLog(sockfd, buf, "REQUEST");
+	//usleep(2000);
 	return (int)s;
 }
 
@@ -50,6 +95,7 @@ int recv_response(int sockfd, char *buff, size_t size) {
 		return (int)r;
 	}
 	buff[r] = '\0';
+	writeLog(sockfd, buff, "RESPONSE");
 	return (int)r;
 }
 
@@ -61,28 +107,18 @@ int get_accounts(Account accounts_buffer[], int max_users, int *out_count) {
 }
 
 int get_account(const char *username, Account *out_account) {
-	if (!username || !out_account) return NULL;
+	if (!username || !out_account) return -1;
 	return db_fetch_account(username, out_account);
 }
-
 
 int create_account(const char *username, const char *password) {
 	if (!username || !password) return -1;
 
-	if (find_account(username)) return -2;
-	if (accountCount >= MAX_USER) return -1;
-
-	int db_result = db_create_account(username, password);
-	if (db_result != 0) return db_result;
-
-	Account *slot = &accounts[accountCount++];
-	memset(slot, 0, sizeof(*slot));
-	strncpy(slot->username, username, sizeof(slot->username) - 1);
-	strncpy(slot->password, password, sizeof(slot->password) - 1);
-	slot->is_logged_in = 0;
-
-	return 0;
+	return db_create_account(username, password);
 }
+
+
+
 
 
 // FAVORITE MANAGEMENT FUNCTIONS
@@ -110,18 +146,19 @@ int delete_favorite(int fav_id, const char *owner) {
 	return db_delete_favorite(fav_id, owner);
 }
 
-int share_favorite(int fav_id, const char *sharer, const char *tagged_users) {
-	if (fav_id <= 0 || !sharer || !tagged_users) return -1;
-	return db_share_favorite(fav_id, sharer, tagged_users);
+int get_favorite_by_id(int fav_id,char *username, FavoritePlace *out_fav) {
+	if (fav_id <= 0 || !out_fav || !username) return -1;
+	return db_fetch_favorite_by_id(fav_id, username,out_fav);
 }
 
-int get_favorite_by_id(int fav_id, FavoritePlace *out_fav) {
-	if (fav_id <= 0 || !out_fav) return -1;
-	return db_fetch_favorite_by_id(fav_id, out_fav);
+int get_tagged_favorites(const char *username, FavoritePlaceWithTags favs[], int max, int *out_count) {
+	if (!username || !out_count || max <= 0) return -1;
+	if (!favs) {
+		*out_count = 0;
+		return 0;
+	}
+	return db_fetch_tagged_favorites(username, favs, max, out_count);
 }
-
-
-
 
 // FRIEND MANAGEMENT FUNCTIONS
 int get_user_friends(const char *username, FriendRel frs[], int max, int *out_count) {
@@ -133,13 +170,6 @@ int get_user_friends(const char *username, FriendRel frs[], int max, int *out_co
 	return db_fetch_user_friends(username, frs, max, out_count);
 }
 
-int accept_friend_request(int request_id, const char *requestee) {
-	if (!requestee || request_id <= 0) return -1;
-	return db_accept_friend_request(request_id, requestee);
-}
-
-
-
 int get_user_requests(const char *username, FriendRequest reqs[], int max, int *out_count) {
 	if (!username || !out_count || max <= 0) return -1;
 	if (!reqs) {
@@ -149,15 +179,15 @@ int get_user_requests(const char *username, FriendRequest reqs[], int max, int *
 	return db_fetch_user_requests(username, reqs, max, out_count);
 }
 
-
 int create_friend_request(const char *from, const char *to) {
 	if (!from || !to) return -1;
 	return db_create_friend_request(from, to);
 }
 
-int get_friend_request_by_id(int request_id, FriendRequest *out_request) {
-	if (!out_request || request_id <= 0) return -1;
-	return db_get_friend_request(request_id, out_request);
+int get_friend_request_by_id(int request_id, char *username, FriendRequest *out_request) {
+	if (!out_request || request_id <= 0 || !username) return -1;
+	return db_fetch_friend_request_by_id(request_id, username, out_request);
+	return 0;
 }
 
 int accept_friend_request(int request_id, const char *requestee) {
@@ -185,14 +215,6 @@ int tag_favorite(int fav_id, const char *tagger, const char *tagged_users) {
 	return db_tag_friend_to_favorite(fav_id, tagger, tagged_users);
 }
 
-int list_tagged_favorites(const char *username, FavoritePlace favs[], int max, int *out_count) {
-	if (!username || !out_count || max <= 0) return -1;
-	if (!favs) {
-		*out_count = 0;
-		return 0;
-	}
-	return db_fetch_tagged_favorites(username, favs, max, out_count);
-}
 
 // NOTIFICATION MANAGEMENT FUNCTIONS
 int get_user_notifications(const char *username, Notification notifs[], int max, int *out_count) {
@@ -205,5 +227,11 @@ int get_user_notifications(const char *username, Notification notifs[], int max,
 }
 
 int mark_notification_seen(int notif_id) {
-	return db_mark_notification_seen(notif_id);
+	// implement later
+	return 0;
+}
+
+int create_notification(const char *to, const char *from, int fav_id, const char *message) {
+	// implement later
+	return 0;
 }

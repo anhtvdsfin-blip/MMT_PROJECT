@@ -1,7 +1,0 @@
-# users file: format per line
-# username|password
-alice|password123
-bob|mypassword
-charlie|charliepass
-dave|davepwd
-erin|erinsecure

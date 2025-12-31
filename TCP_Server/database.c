@@ -7,17 +7,18 @@
 
 
 static sqlite3 *g_db = NULL;
-
-static void copy_text(char *dest, size_t dest_size, const unsigned char *src) {
+// Helper function to copy text safely
+static void copy_text(char *dest, size_t dest_size, const void *src) {
     if (!dest || dest_size == 0) return;
     if (!src) {
         dest[0] = '\0';
         return;
     }
-    strncpy(dest, (const char *)src, dest_size - 1);
+    const char *s = (const char *)src;
+    strncpy(dest, s, dest_size - 1);
     dest[dest_size - 1] = '\0';
 }
-
+// Helper function to execute simple SQL statements
 static int run_simple_sql(const char *sql) {
     char *errmsg = NULL;
     int rc = sqlite3_exec(g_db, sql, NULL, NULL, &errmsg);
@@ -28,7 +29,7 @@ static int run_simple_sql(const char *sql) {
     }
     return 0;
 }
-
+// DATABASE INITIALIZATION AND SHUTDOWN
 int db_initialize(const char *db_path) {
     const char *path = db_path ? db_path : "data/mmt.db";
 
@@ -89,15 +90,17 @@ int db_initialize(const char *db_path) {
         "FOREIGN KEY(recipient) REFERENCES accounts(username) ON DELETE CASCADE," \
         "FOREIGN KEY(actor) REFERENCES accounts(username) ON DELETE CASCADE)")) return -1;
 
-    if(run_simple_sql(
+    if (run_simple_sql(
         "CREATE TABLE IF NOT EXISTS favorite_tags(" \
         "fav_id INTEGER NOT NULL," \
         "tagger TEXT NOT NULL," \
         "tagged_users TEXT NOT NULL," \
         "UNIQUE(fav_id, tagged_users)," \
-        "FOREIGN KEY(fav_id) REFERENCES favorites(id) ON DELETE CASCADE)", \
-        "FOREIGN KEY(tagged_users) REFERENCES accounts(username) ON DELETE CASCADE)", \
+        "FOREIGN KEY(fav_id) REFERENCES favorites(id) ON DELETE CASCADE," \
+        "FOREIGN KEY(tagged_users) REFERENCES accounts(username) ON DELETE CASCADE," \
         "FOREIGN KEY(tagger) REFERENCES accounts(username) ON DELETE CASCADE)" )) return -1;
+
+   
 
     return 0;
 }
@@ -132,28 +135,6 @@ int db_fetch_accounts(Account accounts[], int max_users, int *out_count) {
     *out_count = idx;
     return 0;
 }
-int db_fetch_account(const char *username, Account *out_account) {
-    if (!g_db || !username || !out_account) return -1;
-
-    const char *sql = "SELECT username, password FROM accounts WHERE username = ?";
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-
-    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT);
-
-    int step = sqlite3_step(stmt);
-    if (step != SQLITE_ROW) {
-        sqlite3_finalize(stmt);
-        return -2;
-    }
-
-    copy_text(out_account->username, sizeof(out_account->username), sqlite3_column_text(stmt, 0));
-    copy_text(out_account->password, sizeof(out_account->password), sqlite3_column_text(stmt, 1));
-    out_account->is_logged_in = 0;
-
-    sqlite3_finalize(stmt);
-    return 0;
-}
 int db_create_account(const char *username, const char *password) {
     if (!g_db || !username || !password) return -1;
 
@@ -173,7 +154,7 @@ int db_create_account(const char *username, const char *password) {
 
 int db_fetch_account(const char * username, Account *out_account) {
     if(!g_db || !username || !out_account) return -1;
-    const char * sql = "SELECT username, password FROM accounts WHERE username = ?";
+    const char * sql = "SELECT username, password, is_logged_in FROM accounts WHERE username = ?";
 
     sqlite3_stmt * stmt = NULL;
     if(sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
@@ -187,25 +168,38 @@ int db_fetch_account(const char * username, Account *out_account) {
 
     copy_text(out_account->username, sizeof(out_account->username), sqlite3_column_text(stmt, 0));
     copy_text(out_account->password, sizeof(out_account->password), sqlite3_column_text(stmt, 1));
-    out_account->is_logged_in = 0;
+    out_account->is_logged_in = sqlite3_column_int(stmt, 2);
     sqlite3_finalize(stmt);
     return 0;
+}
+
+int db_update_logged_in_status(const char *username, int is_logged_in) {
+    if (!g_db || !username) return -1;
+
+    const char *sql = "UPDATE accounts SET is_logged_in = ? WHERE username = ?";
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_int(stmt, 1, is_logged_in);
+    sqlite3_bind_text(stmt, 2, username, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
 
 // FAVORITE PLACE DATABASE FUNCTIONS
 int db_fetch_user_favorites(const char *owner, FavoritePlace favs[], int max_items, int *out_count) {
+    
     if (!g_db || !owner || !out_count || max_items <= 0) return -1;
 
-    *out_count = 0;
-    if (!favs) return 0;
-
-    const char *sql =
-        "SELECT id, owner, name, category, location, is_shared, COALESCE(sharer,''), COALESCE(tagged,'')," \
-        " COALESCE(created_at,0) FROM favorites WHERE owner = ? ORDER BY created_at DESC";
+    const char *sql = "SELECT * FROM favorites WHERE owner = ?";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
     sqlite3_bind_text(stmt, 1, owner, -1, SQLITE_TRANSIENT);
 
     int idx = 0;
@@ -215,10 +209,7 @@ int db_fetch_user_favorites(const char *owner, FavoritePlace favs[], int max_ite
         copy_text(favs[idx].name, sizeof(favs[idx].name), sqlite3_column_text(stmt, 2));
         copy_text(favs[idx].category, sizeof(favs[idx].category), sqlite3_column_text(stmt, 3));
         copy_text(favs[idx].location, sizeof(favs[idx].location), sqlite3_column_text(stmt, 4));
-        favs[idx].is_shared = sqlite3_column_int(stmt, 5);
-        copy_text(favs[idx].sharer, sizeof(favs[idx].sharer), sqlite3_column_text(stmt, 6));
-        copy_text(favs[idx].tagged, sizeof(favs[idx].tagged), sqlite3_column_text(stmt, 7));
-        favs[idx].created_at = (time_t)sqlite3_column_int64(stmt, 8);
+        favs[idx].created_at = (time_t)sqlite3_column_int64(stmt, 6);
         idx++;
     }
 
@@ -226,13 +217,14 @@ int db_fetch_user_favorites(const char *owner, FavoritePlace favs[], int max_ite
     *out_count = idx;
     return 0;
 }
+
+int db_create_favorite(const char *owner, const char *name, const char *category, const char *location) {
     
-int db_create_favorite(const char *name, const char *owner, const char *category, const char *location) {
-    if (!g_db || !name || !owner || !category || !location) return -1;
+    if (!g_db || !owner || !name || !category || !location) return -1;
 
     const char *sql =
-        "INSERT INTO favorites( owner, name, category, location, is_shared, sharer, tagged, created_at) "
-        "VALUES(?, ?, ?, ?, 0, '', '', strftime('%s','now'))";
+        "INSERT INTO favorites(owner, name, category, location, created_at) "
+        "VALUES(?, ?, ?, ?, strftime('%s','now'))";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
@@ -245,68 +237,23 @@ int db_create_favorite(const char *name, const char *owner, const char *category
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
 
-    if (rc != SQLITE_DONE) return -1;
-
-    sqlite3_int64 row_id = sqlite3_last_insert_rowid(g_db);
-    if (row_id > INT_MAX) return -1;
-    return (int)row_id;
+    if (rc == SQLITE_CONSTRAINT) return -2;
+    return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
-int db_update_favorite(int fav_id, const char *name, const char *category, const char *location) {
-    if (!g_db || fav_id <= 0 || !name || !category || !location) return -1;
+int db_fetch_favorite_by_id(int fav_id, char *username , FavoritePlace *out_fav) {
+    printf("Entering db_fetch_favorite_by_id with fav_id: %d, username: %s\n", fav_id, username);
+    if (!g_db || fav_id <= 0 || !out_fav || !username ) return -1;
 
     const char *sql =
-        "UPDATE favorites SET name = ?, category = ?, location = ? WHERE id = ?";
-
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-
-    sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 2, category, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_text(stmt, 3, location, -1, SQLITE_TRANSIENT);
-    sqlite3_bind_int(stmt, 4, fav_id);
-    sqlite3_bind_text(stmt, 5, owner, -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    int changed = sqlite3_changes(g_db);
-    sqlite3_finalize(stmt);
-
-    if (rc != SQLITE_DONE) return -1;
-    if (changed == 0) return -2;
-    return 0;
-}
-
-int db_delete_favorite(int fav_id) {
-    if (!g_db || fav_id <= 0) return -1;
-
-    const char *sql = "DELETE FROM favorites WHERE id = ?";
-
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-
-    sqlite3_bind_int(stmt, 1, fav_id);
-    sqlite3_bind_text(stmt, 2, owner, -1, SQLITE_TRANSIENT);
-
-    int rc = sqlite3_step(stmt);
-    int changed = sqlite3_changes(g_db);
-    sqlite3_finalize(stmt);
-
-    if (rc != SQLITE_DONE) return -1;
-    if (changed == 0) return -2;
-    return 0;
-}
-
-int db_fetch_favorite_by_id(int fav_id, FavoritePlace *out_fav) {
-    if (!g_db || fav_id <= 0 || !out_fav) return -1;
-
-    const char *sql =
-        "SELECT id, owner, name, category, location" \
-        " COALESCE(created_at,0) FROM favorites WHERE id = ?";
-
+        "SELECT id, owner, name, category, location," \
+        " COALESCE(created_at,0) FROM favorites WHERE id = ? AND owner = ?";
+    printf("SQL Query: %s\n", sql);
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int(stmt, 1, fav_id);
-
+    sqlite3_bind_text(stmt, 2, username, -1, SQLITE_TRANSIENT);
+    printf("Executing SQL statement...\n");
     int step = sqlite3_step(stmt);
     if (step != SQLITE_ROW) {
         sqlite3_finalize(stmt);
@@ -323,6 +270,81 @@ int db_fetch_favorite_by_id(int fav_id, FavoritePlace *out_fav) {
     sqlite3_finalize(stmt);
     return 0;
 }
+
+int db_update_favorite(int fav_id, const char *owner, const char *name, const char *category, const char *location) {
+    if (!g_db || fav_id <= 0 || !owner || !name || !category || !location) return -1;
+
+    const char *sql =
+        "UPDATE favorites SET name = ?, category = ?, location = ? "
+        "WHERE id = ? AND owner = ?";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, name, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, category, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, location, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_int(stmt, 4, fav_id);
+    sqlite3_bind_text(stmt, 5, owner, -1, SQLITE_TRANSIENT);
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc == SQLITE_CONSTRAINT) return -2;
+    if (sqlite3_changes(g_db) == 0) return -3;
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_delete_favorite(int fav_id, const char *owner) {
+    if (!g_db || fav_id <= 0 || !owner) return -1;
+
+    const char *sql = "DELETE FROM favorites WHERE id = ? AND owner = ?";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_int(stmt, 1, fav_id);
+    sqlite3_bind_text(stmt, 2, owner, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    sqlite3_finalize(stmt);
+
+    if (rc == SQLITE_CONSTRAINT ) return -2;
+    if (sqlite3_changes(g_db) == 0) return -3;
+    return (rc == SQLITE_DONE) ? 0 : -1;
+}
+
+int db_fetch_tagged_favorites(const char *username, FavoritePlaceWithTags favs[], int max_items, int *out_count) {
+    if( !g_db || !username || !out_count || max_items <= 0) return -1;
+
+    *out_count = 0;
+    if(!favs) return 0;
+
+    const char * sql =
+        "SELECT f.id, f.owner, f.name, f.category, f.location, f.created_at, ft.tagger "
+        "FROM favorites f "
+        "JOIN favorite_tags ft ON f.id = ft.fav_id "
+        "WHERE ft.tagged_users = ? "
+        "ORDER BY f.created_at DESC";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT);
+    int idx = 0;
+    while (sqlite3_step(stmt) == SQLITE_ROW && idx < max_items) {
+        favs[idx].id = sqlite3_column_int(stmt, 0);
+        copy_text(favs[idx].owner, sizeof(favs[idx].owner), sqlite3_column_text(stmt, 1));
+        copy_text(favs[idx].name, sizeof(favs[idx].name), sqlite3_column_text(stmt, 2));
+        copy_text(favs[idx].category, sizeof(favs[idx].category), sqlite3_column_text(stmt, 3));
+        copy_text(favs[idx].location, sizeof(favs[idx].location), sqlite3_column_text(stmt, 4));
+        favs[idx].created_at = (time_t)sqlite3_column_int64(stmt, 5);
+        copy_text(favs[idx].tagger, sizeof(favs[idx].tagger), sqlite3_column_text(stmt, 6));
+        idx++;
+    }
+    sqlite3_finalize(stmt);
+    *out_count = idx;
+    return 0;
+}
+
 // FRIEND DATABASE FUNCTIONS
 int db_fetch_user_friends(const char *username, FriendRel friends[], int max_items, int *out_count) {
     if (!g_db || !username || !out_count || max_items <= 0) return -1;
@@ -360,7 +382,7 @@ int db_fetch_user_requests(const char *username, FriendRequest requests[], int m
 
     const char *sql =
         "SELECT id, requester, requestee, status, created_at FROM friend_requests "
-        "WHERE requester = ? ORDER BY created_at DESC";
+        "WHERE requestee = ? ORDER BY created_at DESC";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
@@ -379,6 +401,32 @@ int db_fetch_user_requests(const char *username, FriendRequest requests[], int m
     sqlite3_finalize(stmt);
     *out_count = idx;
     return 0;
+}
+
+
+int db_check_duplicate_friend_request(const char *from_user, const char *to_user) {
+    if (!g_db || !from_user || !to_user) return -1;
+
+    const char *sql =
+        "SELECT COUNT(*) FROM friend_requests "
+        "WHERE requester = ? AND requestee = ? AND status = 0";
+
+    sqlite3_stmt *stmt = NULL;
+    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
+
+    sqlite3_bind_text(stmt, 1, from_user, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 2, to_user, -1, SQLITE_TRANSIENT);
+
+    int rc = sqlite3_step(stmt);
+    if (rc != SQLITE_ROW) {
+        sqlite3_finalize(stmt);
+        return -1;
+    }
+
+    int count = sqlite3_column_int(stmt, 0);
+    sqlite3_finalize(stmt);
+
+    return (count > 0) ? 1 : 0;
 }
 
 int db_create_friend_request(const char *from_user, const char *to_user) {
@@ -400,15 +448,16 @@ int db_create_friend_request(const char *from_user, const char *to_user) {
     return (rc == SQLITE_DONE) ? 0 : -1;
 }
 
-int db_get_friend_request_by_id(int request_id, FriendRequest *out_request) {
-    if (!g_db || !out_request || request_id <= 0) return -1;
+int db_fetch_friend_request_by_id(int request_id, char *username ,FriendRequest *out_request) {
+    if (!g_db || !out_request || request_id <= 0 || !username) return -1;
 
     const char *sql =
-        "SELECT id, requester, requestee, status, created_at FROM friend_requests WHERE id = ?";
+        "SELECT id, requester, requestee, status, created_at FROM friend_requests WHERE id = ? AND requestee = ?";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
     sqlite3_bind_int(stmt, 1, request_id);
+    sqlite3_bind_text(stmt, 2, username, -1, SQLITE_TRANSIENT);
 
     int step = sqlite3_step(stmt);
     if (step != SQLITE_ROW) {
@@ -470,11 +519,11 @@ int db_accept_friend_request(int request_id, const char *requestee) {
 
     char user_a[MAX_NAME_LEN];
     char user_b[MAX_NAME_LEN];
-    if (strcmp(requester, requestee_db) < 0) {
+    if (strcmp(requester, requestee_from_db) < 0) {
         strncpy(user_a, requester, sizeof(user_a));
-        strncpy(user_b, requestee_db, sizeof(user_b));
+        strncpy(user_b, requestee_from_db, sizeof(user_b));
     } else {
-        strncpy(user_a, requestee_db, sizeof(user_a));
+        strncpy(user_a, requestee_from_db, sizeof(user_a));
         strncpy(user_b, requester, sizeof(user_b));
     }
     user_a[sizeof(user_a) - 1] = '\0';
@@ -531,27 +580,33 @@ int db_reject_friend_request(int request_id, const char *requestee) {
     sqlite3_bind_text(stmt, 2, requestee, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+    if(rc == SQLITE_CONSTRAINT) return -2;
     if (rc != SQLITE_DONE) return -1;
     int changed = sqlite3_changes(g_db);
-    if (changed == 0) return -2;
+    if (changed == 0) return -3;
     return 0;
 }
 
 int db_remove_friendship(const char *user_a, const char *user_b) {
     if (!g_db || !user_a || !user_b) return -1;
 
-    const char *sql = "DELETE FROM friendships WHERE user_a = ? AND user_b = ?";
+    const char *sql =
+        "DELETE FROM friendships WHERE "
+        "(user_a = ? AND user_b = ?) OR (user_a = ? AND user_b = ?)";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
 
     sqlite3_bind_text(stmt, 1, user_a, -1, SQLITE_TRANSIENT);
     sqlite3_bind_text(stmt, 2, user_b, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 3, user_b, -1, SQLITE_TRANSIENT);
+    sqlite3_bind_text(stmt, 4, user_a, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
     if (rc != SQLITE_DONE) return -1;
+    if (rc == SQLITE_CONSTRAINT) return -2;
     int changed = sqlite3_changes(g_db);
-    if (changed == 0) return -2;
+    if (changed == 0) return -3;
     return 0;
 }
 
@@ -583,7 +638,7 @@ int db_tag_friend_to_favorite(int fav_id, const char *tagger, const char *tagged
     if (!g_db || fav_id <= 0 || !tagger || !tagged_users) return -1;
 
     const char *sql =
-        "INSERT OR IGNORE INTO favorite_tags(fav_id, tagger, tagged_users) VALUES(?, ?, ?)";
+        "INSERT INTO favorite_tags(fav_id, tagger, tagged_users) VALUES(?, ?, ?)";
 
     sqlite3_stmt *stmt = NULL;
     if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
@@ -593,90 +648,19 @@ int db_tag_friend_to_favorite(int fav_id, const char *tagger, const char *tagged
     sqlite3_bind_text(stmt, 3, tagged_users, -1, SQLITE_TRANSIENT);
     int rc = sqlite3_step(stmt);
     sqlite3_finalize(stmt);
+    if (rc == SQLITE_CONSTRAINT) return -2;
     if (rc != SQLITE_DONE) return -1;
     return 0;
 }
 
-int db_fetch_tagged_favorites(const char *username, FavoritePlace favs[], int max_items, int *out_count) {
-    if (!g_db || !username || !out_count || max_items <= 0) return -1;
 
-    *out_count = 0;
-    if (!favs) return 0;
-
-    const char *sql =
-        "SELECT f.id, f.owner, f.name, f.category, f.location, f.is_shared, "
-        "COALESCE(f.sharer,''), COALESCE(f.tagged,''), COALESCE(f.created_at,0) "
-        "FROM favorites f "
-        "JOIN favorite_tags ft ON f.id = ft.fav_id "
-        "WHERE ft.tagged_users = ? "
-        "ORDER BY f.created_at DESC";
-
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT);
-
-    int idx = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW && idx < max_items) {
-        favs[idx].id = sqlite3_column_int(stmt, 0);
-        copy_text(favs[idx].owner, sizeof(favs[idx].owner), sqlite3_column_text(stmt, 1));
-        copy_text(favs[idx].name, sizeof(favs[idx].name), sqlite3_column_text(stmt, 2));
-        copy_text(favs[idx].category, sizeof(favs[idx].category), sqlite3_column_text(stmt, 3));
-        copy_text(favs[idx].location, sizeof(favs[idx].location), sqlite3_column_text(stmt, 4));
-        favs[idx].is_shared = sqlite3_column_int(stmt, 5);
-        copy_text(favs[idx].sharer, sizeof(favs[idx].sharer), sqlite3_column_text(stmt, 6));
-        copy_text(favs[idx].tagged, sizeof(favs[idx].tagged), sqlite3_column_text(stmt, 7));
-        favs[idx].created_at = (time_t)sqlite3_column_int64(stmt, 8);
-        idx++;
-    }
-
-    sqlite3_finalize(stmt);
-    *out_count = idx;
-    return 0;
-}
 
 // NOTIFICATION DATABASE FUNCTIONS
 int db_fetch_user_notifications(const char *username, Notification notifications[], int max_items, int *out_count) {
-    if (!g_db || !username || !out_count || max_items <= 0) return -1;
-
-    *out_count = 0;
-    if (!notifications) return 0;
-
-    const char *sql =
-        "SELECT id, recipient, actor, fav_id, message, seen, created_at FROM notifications "
-        "WHERE recipient = ? ORDER BY created_at DESC";
-
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-    sqlite3_bind_text(stmt, 1, username, -1, SQLITE_TRANSIENT);
-
-    int idx = 0;
-    while (sqlite3_step(stmt) == SQLITE_ROW && idx < max_items) {
-        notifications[idx].id = sqlite3_column_int(stmt, 0);
-        copy_text(notifications[idx].to, sizeof(notifications[idx].to), sqlite3_column_text(stmt, 1));
-        copy_text(notifications[idx].from, sizeof(notifications[idx].from), sqlite3_column_text(stmt, 2));
-        notifications[idx].fav_id = sqlite3_column_int(stmt, 3);
-        copy_text(notifications[idx].message, sizeof(notifications[idx].message), sqlite3_column_text(stmt, 4));
-        notifications[idx].seen = sqlite3_column_int(stmt, 5);
-        notifications[idx].created_at = (time_t)sqlite3_column_int64(stmt, 6);
-        idx++;
-    }
-
-    sqlite3_finalize(stmt);
-    *out_count = idx;
-    return 0;
+    // implementation later
 }
 
 
 int db_mark_notification_seen(int notif_id) {
-    if (!g_db) return -1;
-
-    const char *sql = "UPDATE notifications SET seen = 1 WHERE id = ?";
-    sqlite3_stmt *stmt = NULL;
-    if (sqlite3_prepare_v2(g_db, sql, -1, &stmt, NULL) != SQLITE_OK) return -1;
-
-    sqlite3_bind_int(stmt, 1, notif_id);
-    int rc = sqlite3_step(stmt);
-    sqlite3_finalize(stmt);
-
-    return (rc == SQLITE_DONE) ? 0 : -1;
+    // implementation later
 }

@@ -2,6 +2,8 @@
 #define ENTITY_ENTITIES_H
 
 #include <time.h>
+#include <sys/socket.h>
+#include <netinet/in.h>
 
 #define MAX_NAME_LEN 64
 #define MAX_PASS_LEN 128
@@ -39,6 +41,16 @@ typedef struct favorite_place_t {
     char location[MAX_DESC_LEN];
     time_t created_at;
 } FavoritePlace;
+
+typedef struct favorite_place_with_tags_t {
+    int id;
+    char owner[MAX_NAME_LEN];
+    char name[MAX_TITLE_LEN];
+    char category[MAX_CAT_LEN];
+    char location[MAX_DESC_LEN];
+    time_t created_at;
+    char tagger[MAX_NAME_LEN];
+} FavoritePlaceWithTags;
 
 typedef struct favorite_tags_t {
     int fav_id;

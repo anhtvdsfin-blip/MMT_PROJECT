@@ -1,2 +1,0 @@
-# friend requests file: format per line
-# id|from|to|status|created_at

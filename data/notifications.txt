@@ -1,2 +1,0 @@
-# notifications file: format per line
-# id|to|from|fav_id|message|seen|created_at
